@@ -30,11 +30,11 @@ critical.
 
 | Metric | Acceptable Low Score Scenario | Critical Low Score Scenario | Action Required |
 |---|---|---|---|
-| Faithfulness | | | |
-| Answer Relevance | | | |
-| Context Recall | | | |
-| Context Precision | | | |
-| Completeness | | | |
+| Faithfulness | LLM từ chối trả lời vì không có thông tin (refusal), hoặc bổ sung hướng dẫn an toàn cần thiết ngoài context. | LLM tự bịa ra thông tin sai lệch (hallucination) hoặc chính sách giá/thời gian không có trong tài liệu. | Tune lại system prompt buộc LLM chỉ dùng context, hoặc chặn output nếu < 0.8. |
+| Answer Relevance | Câu hỏi của user mang tính giao tiếp phiếm (chitchat) hoặc out-of-scope. | Câu hỏi về chính sách cốt lõi nhưng hệ thống trả lời lạc sang một quy trình khác. | Kiểm tra xem retriever có lấy nhầm chunk không, nếu không thì sửa prompt. |
+| Context Recall | User hỏi một câu không có câu trả lời trong knowledge base. | User hỏi câu trọng tâm nhưng retriever bỏ sót tài liệu chính do sai sót về từ vựng (lexical gap). | Thêm query expansion, hybrid search (BM25 + Dense) hoặc tinh chỉnh chunk size. |
+| Context Precision | Có rất nhiều chunks chứa thông tin rác nhưng câu trả lời cuối vẫn cần một câu chốt. | Relevant chunk rớt xuống dưới Top 10, khiến LLM bị context truncation hoặc "lost in the middle". | Thêm Re-ranker (cross-encoder) để đưa chunks liên quan lên đầu. |
+| Completeness | User chỉ hỏi Yes/No thay vì quy trình đầy đủ. | Trả lời thiếu một bước bắt buộc trong quy trình xử lý lỗi gây hậu quả cho khách hàng. | Semantic chunking để gộp nguyên quy trình vào 1 chunk. |
 
 ### Exercise 1.2 — Bias trong LLM-as-a-Judge
 
@@ -46,15 +46,17 @@ Ba bias thường gặp:
 
 **Câu 1: Thiết kế experiment phát hiện position bias với ít nhất hai conditions.**
 
-> *Câu trả lời:*
+> **Condition A:** Đưa Câu trả lời 1 lên trước, Câu trả lời 2 xuống dưới. Judge chọn xem câu nào tốt hơn.
+> **Condition B:** Đảo vị trí, đưa Câu trả lời 2 lên trước, Câu trả lời 1 xuống dưới.
+> **Phát hiện:** Nếu tỷ lệ Judge chọn "câu nằm trên" ở cả hai condition vượt quá 60% (không nhất quán về nội dung), thì Judge đó có position bias. Giải pháp là chạy cả 2 swap và lấy consensus, hoặc dùng single-answer scoring thay vì pairwise.
 
 **Câu 2: Làm thế nào giảm verbosity bias bằng rubric design?**
 
-> *Câu trả lời:*
+> Rubric không được dùng các từ chung chung như "detailed" hay "comprehensive". Thay vào đó, phải yêu cầu Judge đếm số lượng "thông tin hữu ích/cần thiết". Hướng dẫn rõ ràng: "Phạt điểm (trừ 1 điểm) nếu câu trả lời chứa thông tin thừa, lan man không trực tiếp giải quyết câu hỏi".
 
 **Câu 3: Tại sao cần calibrate LLM judge với human labels?**
 
-> *Câu trả lời:*
+> LLM Judge có thể bị drift (lệch chuẩn) hoặc hiểu sai rubric so với ý đồ của con người. Ta cần một tập test set nhỏ (~50-100 câu) do chính con người chấm (Ground Truth). Nếu độ tương đồng (Pearson correlation hoặc Cohen's Kappa) giữa Human và LLM Judge < 0.7, ta cần sửa rubric hoặc few-shot prompt của Judge cho đến khi LLM Judge chấm sát với con người.
 
 ### Exercise 1.3 — Evaluation trong CI/CD
 
@@ -62,13 +64,15 @@ Ba bias thường gặp:
 
 | Metric | Threshold | Lý do |
 |---|---:|---|
-| Faithfulness | | |
-| Answer Relevance | | |
-| Completeness | | |
+| Faithfulness | 0.85 | Ngăn chặn Hallucination. Domain hỗ trợ khách hàng không thể chấp nhận việc AI bịa ra chính sách bảo hành sai, gây thiệt hại tài chính. |
+| Answer Relevance | 0.70 | Giảm thiểu trải nghiệm tồi tệ. Khách hàng hỏi 1 đằng trả lời 1 nẻo. Tuy nhiên có thể nới lỏng hơn Faithfulness một chút do nhiễu từ chitchat. |
+| Completeness | 0.80 | Đảm bảo khách hàng được hướng dẫn đầy đủ các bước (ví dụ: thiếu bước báo cáo trong 48h sẽ làm khách mất quyền lợi). |
 
 **Câu 2: Khi nào dùng offline evaluation, online evaluation và human review?**
 
-> *Câu trả lời:*
+> - **Offline Evaluation:** Dùng trong CI/CD mỗi khi có PR thay đổi prompt, model hoặc RAG pipeline. Chạy trên Golden Dataset để bắt regression nhanh chóng trước khi merge code.
+> - **Human Review:** Dùng để calibrate LLM Judge định kỳ, review các edge cases khó (vd: điểm Faithfulness tự dưng tụt đột biến), hoặc rà soát logs của khách hàng thật để bổ sung vào Golden Dataset.
+> - **Online Evaluation:** Theo dõi real-time trên production qua user feedback (thumbs up/down) hoặc implicit signals (khách hàng phải gọi nhân viên thật sau khi chat với AI). Dùng để phát hiện data drift.
 
 ---
 
@@ -245,7 +249,7 @@ Chọn 3–5 dimensions:
 - [x] Actionability
 - [x] Safety/privacy
 - [ ] Tone/clarity
-- [ ] Dimension khác: __________
+- [ ] Dimension khác: (không dùng)
 
 ---
 
